@@ -161,7 +161,10 @@ class AuthMonitor(Monitor):
                 raise RuntimeError("no auth log found (looked for %s)" % ", ".join(DEFAULT_LOG_PATHS))
             self.log_path = path
             self.backend = "file"
-            self.spawn(self._tail_loop, "tail")
+            # Open + seek synchronously so that every line written after start()
+            # returns is guaranteed to be read (no startup race with the thread).
+            f = self._open_log(seek_end=not self.from_start)
+            self.spawn(lambda: self._tail_loop(f), "tail")
             return
         if not shutil.which("journalctl"):
             raise RuntimeError("no auth log file and no journalctl available")
@@ -189,25 +192,28 @@ class AuthMonitor(Monitor):
         return True
 
     # ------------------------------------------------------------ file tail
-    def _tail_loop(self) -> None:
+    def _open_log(self, seek_end: bool):
         assert self.log_path
-        f = None
-        inode = None
+        try:
+            f = open(self.log_path, "r", errors="replace")
+        except OSError as e:
+            self.record_error(f"open {self.log_path}: {e}")
+            return None
+        if seek_end:
+            f.seek(0, os.SEEK_END)
+        return f
+
+    def _tail_loop(self, f) -> None:
         buf = ""
-        first_open = True
+        inode = os.fstat(f.fileno()).st_ino if f else None
         while not self.stopping:
             if f is None:
-                try:
-                    f = open(self.log_path, "r", errors="replace")
-                    inode = os.fstat(f.fileno()).st_ino
-                    if first_open and not self.from_start:
-                        f.seek(0, os.SEEK_END)
-                    first_open = False
-                except OSError as e:
-                    self.record_error(f"open {self.log_path}: {e}")
+                f = self._open_log(seek_end=False)  # (re)opened after rotation: read all
+                if f is None:
                     if self.sleep(1.0):
                         break
                     continue
+                inode = os.fstat(f.fileno()).st_ino
             chunk = f.read()
             if chunk:
                 buf += chunk
