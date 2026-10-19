@@ -1,0 +1,31 @@
+[Unit]
+Description=SecAgent host intrusion detection and response daemon
+Documentation=https://github.com/GhaithRouahi/secagent
+After=network-online.target rsyslog.service systemd-journald.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/secagentd --policy /etc/secagent/policy.yaml --db /var/lib/secagent/secagent.db --socket /run/secagent/secagentd.sock
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# Runs as root by design: eBPF (CAP_BPF/CAP_PERFMON/CAP_SYS_ADMIN), reading every
+# process's /proc/<pid>/fd, hashing /etc/shadow, and nftables/kill for active response.
+RuntimeDirectory=secagent
+RuntimeDirectoryMode=0750
+StateDirectory=secagent
+StateDirectoryMode=0700
+
+# Hardening that doesn't interfere with monitoring: the agent only *reads* /usr, /etc
+# and home directories (FIM hashes them), and never needs new privileges.
+ProtectSystem=full
+ProtectHome=read-only
+NoNewPrivileges=yes
+LimitNOFILE=65536
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
