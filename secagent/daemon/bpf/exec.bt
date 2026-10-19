@@ -1,0 +1,29 @@
+/*
+ * SecAgent process-exec probe.
+ *
+ * Fires once per successful execve(), after the new image and credentials are committed,
+ * so euid already reflects setuid binaries. Output is JSON tuples (bpftrace -f json),
+ * which escape every string - a malicious process name like 'a|b"c' cannot break parsing.
+ *
+ * Two records per exec: the BPF stack is 512 bytes, too small for one program holding
+ * both the filename and argv, so they are two probe blocks on the same tracepoint
+ * (= two BPF programs, each with its own stack). Both run back-to-back on the same CPU
+ * in attach order, so record 1 always precedes record 2; userspace joins them by pid.
+ *
+ *   1: (pid, ppid, uid, euid, parent_euid, comm, parent_comm, filename)
+ *   2: (pid, argv)   argv read from the new image's memory, NUL-separated,
+ *                    truncated to BPFTRACE_MAX_STRLEN bytes
+ */
+tracepoint:sched:sched_process_exec
+{
+  $t = curtask;
+  $p = $t->real_parent;
+  print((pid, $p->tgid, uid, $t->cred->euid.val, $p->cred->euid.val,
+         comm, $p->comm, str(args->filename)));
+}
+
+tracepoint:sched:sched_process_exec
+{
+  $mm = curtask->mm;
+  print((pid, buf(uptr($mm->arg_start), $mm->arg_end - $mm->arg_start)));
+}

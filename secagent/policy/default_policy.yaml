@@ -1,0 +1,85 @@
+# SecAgent default policy
+# Installed to /etc/secagent/policy.yaml. Reload after editing:  secagentctl policy reload
+#
+# Rule fields
+#   id, description, severity (low|medium|high|critical), mitre (ATT&CK technique id)
+#   match:     field -> value (equality) | [list] (any of) | {operator: value}
+#              operators: eq ne in not_in contains not_contains startswith not_startswith
+#                         endswith glob not_glob regex not_regex gt gte lt lte cidr not_cidr exists
+#   threshold: {count, window (s), group_by: [fields], distinct: field, cooldown (s)}
+#   action:    alert | kill_process | block_ip   (destructive actions also need
+#              response.enabled: true below - see "Active response")
+#   message:   python format string over event fields, e.g. "{parent_name} -> {child_name}"
+version: 1
+
+settings:
+  record_events: true      # keep raw events in SQLite (powers `secagentctl tail` history / dashboard)
+  max_events: 100000       # raw-event retention; alerts are never pruned
+
+monitors:
+  process:
+    enabled: true
+    backend: auto          # auto | ebpf | proc
+    poll_interval: 0.2     # /proc fallback only
+
+rules:
+  # ------------------------------------------------------------------ process execution
+  - id: suspicious-shell-from-webserver
+    description: A network-facing service spawned a shell or network tool (web shell / RCE)
+    mitre: T1505.003
+    severity: high
+    match:
+      event_type: process_exec
+      parent_name: [nginx, apache2, httpd, lighttpd, caddy, php-fpm, php-fpm8.1, php-fpm8.2,
+                    php-fpm8.3, tomcat, java, node, uwsgi, gunicorn, postgres, mysqld, redis-server]
+      child_name: [sh, bash, dash, zsh, ksh, csh, tcsh, fish, nc, ncat, netcat, socat, telnet]
+    message: "{parent_name} (pid {ppid}) spawned {child_name} (pid {pid}): {cmdline}"
+
+  - id: exec-from-temp-dir
+    description: Binary executed from a world-writable temp directory
+    mitre: T1059
+    severity: high
+    match:
+      event_type: process_exec
+      exe: {startswith: [/tmp/, /var/tmp/, /dev/shm/, /run/shm/]}
+    message: "Executed from temp dir: {exe} (pid {pid}, uid {uid}, parent {parent_name})"
+
+  - id: privilege-escalation-to-root
+    description: Process gained root (euid 0) across exec from a non-root parent
+    mitre: T1068
+    severity: high
+    match:
+      event_type: process_exec
+      privilege_escalation: true
+      child_name:
+        not_in: [sudo, su, passwd, chsh, chfn, newgrp, gpasswd, mount, umount, fusermount,
+                 fusermount3, unix_chkpwd, ping, ping6, ssh-keysign, Xorg, dbus-daemon-launch,
+                 polkit-agent-he, chrome-sandbox, snap-confine, ntfs-3g]
+    message: "{child_name} (pid {pid}) is running as root (euid 0) but its parent {parent_name} had euid {parent_euid}"
+
+  - id: reverse-shell-cmdline
+    description: Command line matches a classic reverse-shell pattern
+    mitre: T1059.004
+    severity: critical
+    action: kill_process     # only executes if response.enabled is true
+    match:
+      event_type: process_exec
+      cmdline:
+        regex: ['/dev/(tcp|udp)/', '\b(nc|ncat|netcat)\b.*\s-(e|c)\s', 'bash\s+-i\s*>&',
+                'socat\b.*exec:', 'mkfifo\s.*\b(nc|ncat|sh)\b',
+                'python[0-9.]*\s+-c\s.*socket.*(subprocess|pty|dup2)']
+    message: "Reverse shell pattern in pid {pid} ({child_name}): {cmdline}"
+
+  - id: exec-deleted-binary
+    description: Process running from a binary that was deleted from disk (fileless / cleanup)
+    mitre: T1070.004
+    severity: medium
+    match:
+      event_type: process_exec
+      exe_deleted: true
+    message: "{child_name} (pid {pid}) runs from deleted file {exe}"
+
+# Active response. OFF by default: destructive actions (kill_process, block_ip) are
+# logged as "not executed" unless enabled here. See README "Active response safety".
+response:
+  enabled: false
