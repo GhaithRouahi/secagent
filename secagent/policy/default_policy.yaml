@@ -58,6 +58,11 @@ monitors:
       - {path: /usr/bin/netstat, group: binaries}
       - {path: /usr/bin/bash, group: binaries}
 
+  network:
+    enabled: true
+    backend: auto          # auto | ebpf | proc
+    poll_interval: 0.5     # /proc/net fallback only
+
 rules:
   # ------------------------------------------------------------------ process execution
   - id: suspicious-shell-from-webserver
@@ -156,6 +161,50 @@ rules:
     severity: medium
     match: {event_type: file_change, group: custom}
     message: "{path} {change} (sha256 {old_hash} -> {new_hash})"
+
+  # ------------------------------------------------------------------ network
+  - id: outbound-port-scan
+    description: One process probed many ports on the same host in a short window
+    mitre: T1046
+    severity: high
+    match: {event_type: net_connect}
+    threshold: {count: 15, window: 10, group_by: [pid, dst_ip], distinct: dst_port, cooldown: 60}
+    message: "{process_name} (pid {pid}) hit {count} distinct ports on {dst_ip} within {window}s"
+
+  - id: outbound-connection-burst
+    description: One process opened connections to many distinct endpoints (sweep / beaconing)
+    mitre: T1071
+    severity: medium
+    match: {event_type: net_connect}
+    threshold: {count: 50, window: 30, group_by: [pid], distinct: dst, cooldown: 120}
+    message: "{process_name} (pid {pid}) connected to {count} distinct endpoints within {window}s"
+
+  - id: outbound-suspicious-port
+    description: Outbound connection to a port commonly used by C2 / reverse shells
+    mitre: T1571
+    severity: medium
+    match:
+      event_type: net_connect
+      dst_port: [4444, 4445, 1337, 31337, 6666, 6667, 6697, 5555, 9001, 9050, 12345, 54321]
+    message: "{process_name} (pid {pid}) connected to {dst} (suspicious port)"
+
+  - id: shell-network-connection
+    description: A shell process opened a network connection itself (bash /dev/tcp reverse shell)
+    mitre: T1059.004
+    severity: critical
+    match:
+      event_type: net_connect
+      process_name: [bash, sh, dash, zsh, ksh]
+    message: "Shell {process_name} (pid {pid}) connected out to {dst}"
+
+  - id: bind-shell-listener
+    description: A shell or netcat-style tool started listening on a port (bind shell)
+    mitre: T1571
+    severity: high
+    match:
+      event_type: net_listen
+      process_name: [bash, sh, dash, nc, ncat, netcat, nc.openbsd, nc.traditional, socat]
+    message: "{process_name} (pid {pid}) is listening on {local_ip}:{local_port}"
 
 # Active response. OFF by default: destructive actions (kill_process, block_ip) are
 # logged as "not executed" unless enabled here. See README "Active response safety".

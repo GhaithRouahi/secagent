@@ -133,9 +133,11 @@ def list_pids(proc_root: str = PROC) -> list[int]:
 
 def socket_inodes_by_pid(proc_root: str = PROC, pids: list[int] | None = None) -> dict[int, int]:
     """Map socket inode -> owning pid by scanning /proc/<pid>/fd symlinks
-    (``socket:[12345]``). Needs root to see other users' processes."""
+    (``socket:[12345]``). Needs root to see other users' processes. A socket shared by
+    several processes (inherited fd) is attributed to the lowest pid, usually the
+    creator - a limitation of polling that the eBPF backend doesn't have."""
     out: dict[int, int] = {}
-    for pid in pids if pids is not None else list_pids(proc_root):
+    for pid in sorted(pids if pids is not None else list_pids(proc_root)):
         fd_dir = f"{proc_root}/{pid}/fd"
         try:
             fds = os.listdir(fd_dir)

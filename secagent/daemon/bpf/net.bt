@@ -1,0 +1,67 @@
+/*
+ * SecAgent network probe: TCP connect / accept / listen, IPv4 + IPv6.
+ *
+ *   tcp_connect       fires when the kernel sends the SYN - so connection attempts to
+ *                     closed or filtered ports (i.e. port scans) are visible, unlike
+ *                     /proc/net/tcp polling which only sees sockets that survive.
+ *   inet_csk_accept   (kretprobe) a server accepted an inbound connection
+ *   inet_listen       a socket entered LISTEN (bind shells)
+ *
+ * PIDs are translated into bpftrace's own PID namespace (see exec.bt).
+ * Output (JSON tuples):
+ *   ("connect"|"accept", kpid, pid, comm, family, local_ip, local_port, remote_ip, remote_port)
+ *   ("listen", kpid, pid, comm, family, local_ip, local_port, "", 0)
+ */
+BEGIN
+{
+  @nslevel = curtask->thread_pid->level;
+}
+
+kprobe:tcp_connect
+{
+  $sk = (struct sock *)arg0;
+  $tp = curtask->thread_pid;
+  $nspid = $tp->level >= @nslevel
+    ? ((struct upid *)((uint64)$tp + offsetof(struct pid, numbers)) + @nslevel)->nr : 0;
+  $c = $sk->__sk_common;
+  if ($c.skc_family == 2) {
+    print(("connect", pid, $nspid, comm, 4, ntop(2, $c.skc_rcv_saddr), $c.skc_num,
+           ntop(2, $c.skc_daddr), bswap($c.skc_dport)));
+  } else if ($c.skc_family == 10) {
+    print(("connect", pid, $nspid, comm, 6, ntop(10, $c.skc_v6_rcv_saddr.in6_u.u6_addr8),
+           $c.skc_num, ntop(10, $c.skc_v6_daddr.in6_u.u6_addr8), bswap($c.skc_dport)));
+  }
+}
+
+kretprobe:inet_csk_accept
+{
+  $sk = (struct sock *)retval;
+  if ($sk != 0) {
+    $tp = curtask->thread_pid;
+    $nspid = $tp->level >= @nslevel
+      ? ((struct upid *)((uint64)$tp + offsetof(struct pid, numbers)) + @nslevel)->nr : 0;
+    $c = $sk->__sk_common;
+    if ($c.skc_family == 2) {
+      print(("accept", pid, $nspid, comm, 4, ntop(2, $c.skc_rcv_saddr), $c.skc_num,
+             ntop(2, $c.skc_daddr), bswap($c.skc_dport)));
+    } else if ($c.skc_family == 10) {
+      print(("accept", pid, $nspid, comm, 6, ntop(10, $c.skc_v6_rcv_saddr.in6_u.u6_addr8),
+             $c.skc_num, ntop(10, $c.skc_v6_daddr.in6_u.u6_addr8), bswap($c.skc_dport)));
+    }
+  }
+}
+
+kprobe:inet_listen
+{
+  $sk = ((struct socket *)arg0)->sk;
+  $tp = curtask->thread_pid;
+  $nspid = $tp->level >= @nslevel
+    ? ((struct upid *)((uint64)$tp + offsetof(struct pid, numbers)) + @nslevel)->nr : 0;
+  $c = $sk->__sk_common;
+  if ($c.skc_family == 2) {
+    print(("listen", pid, $nspid, comm, 4, ntop(2, $c.skc_rcv_saddr), $c.skc_num, "", 0));
+  } else if ($c.skc_family == 10) {
+    print(("listen", pid, $nspid, comm, 6, ntop(10, $c.skc_v6_rcv_saddr.in6_u.u6_addr8),
+           $c.skc_num, "", 0));
+  }
+}
