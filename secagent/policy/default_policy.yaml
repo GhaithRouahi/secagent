@@ -274,4 +274,12 @@ rules:
 # Active response. OFF by default: destructive actions (kill_process, block_ip) are
 # logged as "not executed" unless enabled here. See README "Active response safety".
 response:
-  enabled: false
+  enabled: false              # master switch for kill_process / block_ip
+  dry_run: false              # run all safety checks, log the action, don't execute
+  block_duration: 3600        # seconds; nftables entries expire automatically
+  max_actions_per_minute: 10  # circuit breaker
+  firewall: auto              # auto | nftables | iptables
+  allowlist: []               # never block these (loopback is always allowlisted),
+                              # e.g. [10.0.0.0/8, 203.0.113.10/32] for your admin hosts
+  protected_processes: [systemd, init, sshd, sshd-session, secagentd, containerd, dockerd,
+                        kubelet, systemd-journal, dbus-daemon, rsyslogd, polkitd, agetty, login]
