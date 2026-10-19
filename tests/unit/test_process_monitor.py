@@ -152,10 +152,10 @@ def test_decode_argv_handles_escapes():
 def test_bpf_records_joined_by_pid():
     events = []
     mon = ProcessMonitor(events.append, backend="ebpf")
-    mon.handle_bpf_record([4242, 1, 33, 33, 33, "bash", "nginx", "/usr/bin/bash"], now=0)
-    mon.handle_bpf_record([9999, 1, 0, 0, 0, "ls", "sh", "/usr/bin/ls"], now=0)  # interleaved
+    mon.handle_bpf_record([84242, 4242, 1, 33, 33, 33, "bash", "nginx", "/usr/bin/bash"], now=0)
+    mon.handle_bpf_record([89999, 9999, 1, 0, 0, 0, "ls", "sh", "/usr/bin/ls"], now=0)  # interleaved
     assert events == []
-    mon.handle_bpf_record([4242, r"bash\x00-i\x00"], now=0.01)
+    mon.handle_bpf_record([84242, r"bash\x00-i\x00"], now=0.01)
     assert len(events) == 1
     d = events[0].data
     assert (d["pid"], d["child_name"], d["parent_name"], d["cmdline"]) == (4242, "bash", "nginx", "bash -i")
@@ -165,7 +165,7 @@ def test_bpf_records_joined_by_pid():
 def test_bpf_header_without_argv_is_flushed_after_ttl():
     events = []
     mon = ProcessMonitor(events.append, backend="ebpf")
-    mon.handle_bpf_record([4243, 1, 1000, 0, 1000, "pwn", "bash", "/tmp/pwn"], now=0)
+    mon.handle_bpf_record([84243, 4243, 1, 1000, 0, 1000, "pwn", "bash", "/tmp/pwn"], now=0)
     mon.flush_pending(now=0.5)
     assert events == []
     mon.flush_pending(now=2.0)
@@ -175,12 +175,20 @@ def test_bpf_header_without_argv_is_flushed_after_ttl():
     assert d["cmdline_truncated"] is True
 
 
+def test_bpf_skips_tasks_outside_our_pid_namespace():
+    events = []
+    mon = ProcessMonitor(events.append, backend="ebpf")
+    mon.handle_bpf_record([777, 0, 0, 0, 0, 0, "containerd", "systemd", "/usr/bin/containerd"], now=0)
+    mon.handle_bpf_record([777, r"containerd\x00"], now=0)
+    assert events == [] and mon.ns_invisible == 1
+
+
 def test_bpf_ignores_own_helper_pid():
     events = []
     mon = ProcessMonitor(events.append, backend="ebpf")
     mon.ignore_pids = {555}
-    mon.handle_bpf_record([555, 1, 0, 0, 0, "bpftrace", "python3", "/usr/bin/bpftrace"], now=0)
-    mon.handle_bpf_record([555, r"bpftrace\x00"], now=0)
+    mon.handle_bpf_record([8555, 555, 1, 0, 0, 0, "bpftrace", "python3", "/usr/bin/bpftrace"], now=0)
+    mon.handle_bpf_record([8555, r"bpftrace\x00"], now=0)
     assert events == []
 
 

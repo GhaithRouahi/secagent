@@ -80,6 +80,7 @@ class ProcessMonitor(Monitor):
         self.proc_root = proc_root
         self.ignore_pids: set[int] = {os.getpid()}
         self.fallback_reason: str | None = None
+        self.ns_invisible = 0
         self._bpf: BpftraceProcess | None = None
         self._pending: dict[int, tuple[float, list]] = {}
         self._pending_lock = threading.Lock()
@@ -141,11 +142,12 @@ class ProcessMonitor(Monitor):
             self.record_error(f"bpftrace exited: {bpf.stderr_tail}")
 
     def handle_bpf_record(self, rec: list, now: float | None = None) -> None:
-        """Join the two records exec.bt emits per exec (header, then argv) by pid."""
+        """Join the two records exec.bt emits per exec (header, then argv) on the
+        root-namespace pid, which is unique system-wide."""
         now = time.monotonic() if now is None else now
         if not isinstance(rec, list):
             return
-        if len(rec) == 8:
+        if len(rec) == 9:
             with self._pending_lock:
                 self._pending[int(rec[0])] = (now, rec)
         elif len(rec) == 2:
@@ -169,8 +171,11 @@ class ProcessMonitor(Monitor):
             self.flush_pending()
 
     def _emit_bpf(self, header: list, argv_buf: str | None) -> None:
-        pid, ppid, uid, euid, peuid, comm, pcomm, filename = header
+        _kpid, pid, ppid, uid, euid, peuid, comm, pcomm, filename = header
         pid, ppid = int(pid), int(ppid)
+        if pid == 0:
+            self.ns_invisible += 1  # task lives outside our PID namespace
+            return
         if pid in self.ignore_pids:  # our own bpftrace helper
             return
         if argv_buf is not None:

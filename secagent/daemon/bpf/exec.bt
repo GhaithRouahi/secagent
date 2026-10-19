@@ -5,20 +5,37 @@
  * so euid already reflects setuid binaries. Output is JSON tuples (bpftrace -f json),
  * which escape every string - a malicious process name like 'a|b"c' cannot break parsing.
  *
+ * PID namespaces: the `pid` builtin is the *root-namespace* pid. When the agent runs in
+ * a PID namespace (containers, WSL2) that differs from what /proc shows, so we translate
+ * every pid into the namespace bpftrace itself runs in (recorded in BEGIN). Tasks not
+ * visible from that namespace report 0.
+ *
  * Two records per exec: the BPF stack is 512 bytes, too small for one program holding
  * both the filename and argv, so they are two probe blocks on the same tracepoint
  * (= two BPF programs, each with its own stack). Both run back-to-back on the same CPU
- * in attach order, so record 1 always precedes record 2; userspace joins them by pid.
+ * in attach order, so record 1 always precedes record 2; userspace joins them on kpid.
  *
- *   1: (pid, ppid, uid, euid, parent_euid, comm, parent_comm, filename)
- *   2: (pid, argv)   argv read from the new image's memory, NUL-separated,
- *                    truncated to BPFTRACE_MAX_STRLEN bytes
+ *   1: (kpid, pid, ppid, uid, euid, parent_euid, comm, parent_comm, filename)
+ *   2: (kpid, argv)   argv read from the new image's memory, NUL-separated,
+ *                     truncated to BPFTRACE_MAX_STRLEN bytes
  */
+BEGIN
+{
+  @nslevel = curtask->thread_pid->level;
+}
+
 tracepoint:sched:sched_process_exec
 {
+  $lvl = @nslevel;
   $t = curtask;
   $p = $t->real_parent;
-  print((pid, $p->tgid, uid, $t->cred->euid.val, $p->cred->euid.val,
+  $tp = $t->thread_pid;
+  $pp = $p->thread_pid;
+  $nspid = $tp->level >= $lvl
+    ? ((struct upid *)((uint64)$tp + offsetof(struct pid, numbers)) + $lvl)->nr : 0;
+  $nsppid = $pp->level >= $lvl
+    ? ((struct upid *)((uint64)$pp + offsetof(struct pid, numbers)) + $lvl)->nr : 0;
+  print((pid, $nspid, $nsppid, uid, $t->cred->euid.val, $p->cred->euid.val,
          comm, $p->comm, str(args->filename)));
 }
 
