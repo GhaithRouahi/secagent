@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SecAgent Console</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e0e0d;
+    --surface: #1a1a19;
+    --surface-2: #232321;
+    --border: #2e2e2b;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --muted: #8a897f;
+    --accent: #3fd17a;
+    /* severity: status palette, validated on #1a1a19 (CVD ΔE ≥ 12.7, normal ≥ 16.0, ≥ 3:1) */
+    --sev-low: #3987e5;
+    --sev-medium: #fab219;
+    --sev-high: #ea6f2d;
+    --sev-critical: #c4304a;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--mono); }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--border);
+           background: var(--surface); position: sticky; top: 0; z-index: 2; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .5px; }
+  header h1 span { color: var(--accent); }
+  .pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); font-size: 12px; }
+  .pill.ok { color: var(--accent); border-color: #2c5a3c; }
+  .pill.bad { color: #ff7b7b; border-color: #6a2a2a; }
+  .spacer { flex: 1; }
+  main { padding: 16px 20px 40px; display: grid; gap: 16px; max-width: 1400px; margin: 0 auto; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; display: flex; align-items: center; gap: 6px; }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+  .panel h2 { font-size: 12px; margin: 0 0 10px; color: var(--text-2); text-transform: uppercase; letter-spacing: .8px; font-weight: 600;
+              display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .legend { display: flex; gap: 14px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } main { padding: 12px 16px 32px; } }
+  #chart { width: 100%; height: 190px; position: relative; }
+  #chart svg { display: block; width: 100%; height: 100%; }
+  #chart .axis text { fill: var(--muted); font: 10px var(--mono); }
+  #chart .gridline { stroke: var(--border); stroke-width: 1; }
+  .tooltip { position: absolute; pointer-events: none; background: var(--surface-2); border: 1px solid var(--border);
+             border-radius: 6px; padding: 6px 9px; font-size: 12px; white-space: nowrap; display: none; z-index: 3; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+       padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 7px 8px; border-bottom: 1px solid #222220; vertical-align: top; }
+  tr.alert-row { cursor: pointer; }
+  tr.alert-row:hover td { background: var(--surface-2); }
+  tr.new td { animation: flash 2.5s ease-out; }
+  @keyframes flash { from { background: #3a2a10; } to { background: transparent; } }
+  .sev { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 11px; letter-spacing: .5px; }
+  .msg { color: var(--text); word-break: break-word; }
+  .rule { color: var(--text-2); }
+  .result { color: #d7a6ff; font-size: 12px; }
+  .mono-muted { color: var(--muted); white-space: nowrap; }
+  pre.raw { margin: 0; padding: 10px; background: var(--bg); border-radius: 6px; color: var(--text-2); overflow-x: auto; font-size: 12px; }
+  .table-wrap { overflow-x: auto; }
+  #rules li, #monitors li { list-style: none; display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid #222220; }
+  #rules, #monitors { margin: 0; padding: 0; }
+  .empty { color: var(--muted); padding: 18px 8px; text-align: center; }
+  select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font: 12px var(--mono); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>▍</span>secagent<span>://</span><span id="host" style="color:var(--text)">…</span></h1>
+  <span id="daemon" class="pill">connecting…</span>
+  <span id="uptime" class="pill">up –</span>
+  <span id="response" class="pill">response –</span>
+  <span class="spacer"></span>
+  <span class="pill" id="updated">–</span>
+</header>
+<main>
+  <section class="tiles" id="tiles"></section>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>Alerts per minute · last 60 min
+        <span class="legend" id="legend"></span>
+      </h2>
+      <div id="chart"><div class="tooltip" id="tip"></div></div>
+    </section>
+    <section class="panel">
+      <h2>Monitors</h2>
+      <ul id="monitors"></ul>
+      <h2 style="margin-top:16px">Top rules</h2>
+      <ul id="rules"></ul>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Live alert feed
+      <select id="sevFilter" aria-label="Minimum severity">
+        <option value="">all severities</option>
+        <option value="medium">medium +</option>
+        <option value="high">high +</option>
+        <option value="critical">critical</option>
+      </select>
+    </h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Time</th><th>Severity</th><th>Rule</th><th>Detail</th></tr></thead>
+        <tbody id="feed"><tr><td colspan="5" class="empty">no alerts yet — the host looks quiet</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const SEVS = ["low", "medium", "high", "critical"];
+const SEV_RANK = Object.fromEntries(SEVS.map((s, i) => [s, i]));
+const color = s => `var(--sev-${s})`;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtTime = ts => new Date(ts * 1000).toLocaleTimeString([], {hour12: false});
+const fmtDur = s => { s = Math.floor(s); const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${s%60}s`; };
+
+let alerts = [];          // newest first
+let lastId = null;
+let firstLoad = true;
+
+$("legend").innerHTML = [...SEVS].reverse().map(s =>
+  `<span><i class="dot" style="background:${color(s)}"></i>${s}</span>`).join("");
+
+function sevBadge(s) {
+  return `<span class="sev" style="color:var(--text)"><i class="dot" style="background:${color(s)}"></i>${s.toUpperCase()}</span>`;
+}
+
+async function getJSON(url) {
+  const r = await fetch(url, {cache: "no-store"});
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  return r.json();
+}
+
+function renderTiles(st, stats) {
+  const by = stats.alerts_by_severity;
+  const tiles = [
+    ...[...SEVS].reverse().map(s => ({label: s, value: by[s] || 0, dot: color(s)})),
+    {label: "alerts total", value: stats.alerts_total},
+    {label: "events stored", value: stats.events_total.toLocaleString()},
+  ];
+  $("tiles").innerHTML = tiles.map(t => `<div class="tile"><div class="label">${t.dot ? `<i class="dot" style="background:${t.dot}"></i>` : ""}${esc(t.label)}</div>
+    <div class="value">${esc(t.value)}</div></div>`).join("");
+  $("rules").innerHTML = stats.top_rules.length ? stats.top_rules.map(r =>
+    `<li><span class="rule">${esc(r.rule_id)}</span><span>${r.count}</span></li>`).join("") : `<li class="mono-muted">none</li>`;
+}
+
+function renderStatus(st) {
+  const live = st.daemon;
+  $("daemon").textContent = live ? "● secagentd running" : "daemon offline (read-only)";
+  $("daemon").className = "pill " + (live ? "ok" : "bad");
+  $("host").textContent = st.hostname || "local";
+  $("uptime").textContent = live ? `up ${fmtDur(st.uptime)}` : "up –";
+  if (live) {
+    const r = st.response;
+    $("response").textContent = r.enabled ? `response ARMED${r.dry_run ? " (dry-run)" : ""}` : "response: alert-only";
+    $("response").className = "pill " + (r.enabled && !r.dry_run ? "bad" : "");
+    $("monitors").innerHTML = st.monitors.map(m => `<li><span>${esc(m.name)} <span class="mono-muted">[${esc(m.backend)}]</span></span>
+      <span class="${m.running ? "" : "mono-muted"}" style="color:${m.running ? "var(--accent)" : ""}">${m.running ? "running" : "stopped"} · ${m.events.toLocaleString()} ev</span></li>`).join("")
+      + Object.entries(st.monitor_failures || {}).map(([n, e]) => `<li><span>${esc(n)}</span><span style="color:#ff7b7b" title="${esc(e)}">failed</span></li>`).join("");
+  } else {
+    $("monitors").innerHTML = `<li class="mono-muted">daemon not running</li>`;
+  }
+}
+
+/* stacked bars, 1-minute buckets, severity bottom (low) to top (critical), 2px surface gaps */
+function renderChart(stats, now) {
+  const el = $("chart"), tip = $("tip");
+  const W = el.clientWidth, H = el.clientHeight, padL = 30, padB = 20, padT = 6;
+  const bucket = stats.bucket_seconds, end = Math.floor(now / bucket) * bucket, n = 60;
+  const byBucket = Object.fromEntries(stats.timeline.map(b => [b.bucket, b]));
+  const data = Array.from({length: n}, (_, i) => {
+    const t = end - (n - 1 - i) * bucket, b = byBucket[t] || {};
+    return {t, ...Object.fromEntries(SEVS.map(s => [s, b[s] || 0]))};
+  });
+  const max = Math.max(4, ...data.map(d => SEVS.reduce((a, s) => a + d[s], 0)));
+  const nice = Math.ceil(max / 4) * 4;
+  const plotW = W - padL - 4, plotH = H - padB - padT, slot = plotW / n, bw = Math.max(2, slot - 2);
+  const y = v => padT + plotH - (v / nice) * plotH;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Alerts per minute by severity, last 60 minutes"><g class="axis">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = nice * i / 4, yy = y(v);
+    svg += `<line class="gridline" x1="${padL}" x2="${W - 4}" y1="${yy}" y2="${yy}"/><text x="${padL - 6}" y="${yy + 3}" text-anchor="end">${v}</text>`;
+  }
+  [0, 15, 30, 45, 59].forEach(i => svg += `<text x="${padL + i * slot + slot / 2}" y="${H - 5}" text-anchor="middle">${i === 59 ? "now" : `-${59 - i}m`}</text>`);
+  svg += `</g>`;
+  data.forEach((d, i) => {
+    let acc = 0;
+    const x = padL + i * slot + (slot - bw) / 2;
+    const top = SEVS.filter(s => d[s] > 0).pop();
+    SEVS.forEach(s => {
+      if (!d[s]) return;
+      const y0 = y(acc), y1 = y(acc + d[s]);
+      const h = Math.max(1, y0 - y1 - (acc > 0 ? 2 : 0));   // 2px surface gap between segments
+      const r = s === top ? Math.min(3, h / 2, bw / 2) : 0;  // rounded data-end on the top segment only
+      svg += r ? `<path d="M${x},${y1 + h} V${y1 + r} Q${x},${y1} ${x + r},${y1} H${x + bw - r} Q${x + bw},${y1} ${x + bw},${y1 + r} V${y1 + h} Z" fill="${color(s)}"/>`
+               : `<rect x="${x}" y="${y1}" width="${bw}" height="${h}" fill="${color(s)}"/>`;
+      acc += d[s];
+    });
+    svg += `<rect x="${padL + i * slot}" y="${padT}" width="${slot}" height="${plotH}" fill="transparent" data-i="${i}"/>`;
+  });
+  el.innerHTML = svg + `</svg>`;
+  el.appendChild(tip);
+  el.querySelectorAll("rect[data-i]").forEach(r => {
+    r.addEventListener("mousemove", ev => {
+      const d = data[+r.dataset.i], total = SEVS.reduce((a, s) => a + d[s], 0);
+      tip.innerHTML = `<div style="color:var(--text-2)">${fmtTime(d.t)}</div>` + (total ? [...SEVS].reverse().filter(s => d[s]).map(s =>
+        `<div><i class="dot" style="background:${color(s)}"></i> ${s}: <b>${d[s]}</b></div>`).join("") : `<div class="mono-muted">no alerts</div>`);
+      tip.style.display = "block";
+      const box = el.getBoundingClientRect();
+      tip.style.left = Math.min(ev.clientX - box.left + 12, W - tip.offsetWidth - 4) + "px";
+      tip.style.top = Math.max(0, ev.clientY - box.top - 40) + "px";
+    });
+    r.addEventListener("mouseleave", () => tip.style.display = "none");
+  });
+}
+
+function detailCell(a) {
+  return `<div class="msg">${esc(a.message)}</div>` +
+    (a.action_result ? `<div class="result">⚡ ${esc(a.action)}: ${esc(a.action_result)}</div>` : "");
+}
+
+function renderFeed(newIds) {
+  const min = $("sevFilter").value;
+  const rows = alerts.filter(a => !min || SEV_RANK[a.severity] >= SEV_RANK[min]).slice(0, 200);
+  if (!rows.length) { $("feed").innerHTML = `<tr><td colspan="5" class="empty">no alerts match</td></tr>`; return; }
+  $("feed").innerHTML = rows.map(a => `<tr class="alert-row ${newIds.has(a.id) ? "new" : ""}" data-id="${a.id}">
+      <td class="mono-muted">${a.id}</td><td class="mono-muted">${fmtTime(a.timestamp)}</td>
+      <td>${sevBadge(a.severity)}</td><td class="rule">${esc(a.rule_id)}</td><td>${detailCell(a)}</td></tr>
+    <tr class="raw-row" data-for="${a.id}" hidden><td colspan="5"><pre class="raw">${esc(JSON.stringify(a.event, null, 2))}</pre></td></tr>`).join("");
+}
+
+$("feed").addEventListener("click", ev => {
+  const row = ev.target.closest("tr.alert-row");
+  if (!row) return;
+  const raw = $("feed").querySelector(`tr.raw-row[data-for="${row.dataset.id}"]`);
+  raw.hidden = !raw.hidden;
+});
+$("sevFilter").addEventListener("change", () => renderFeed(new Set()));
+
+async function tick() {
+  try {
+    const q = lastId === null ? "/api/alerts?limit=200" : `/api/alerts?after_id=${lastId}&limit=500`;
+    const [st, stats, fresh] = await Promise.all([getJSON("/api/status"), getJSON("/api/stats?hours=1&bucket=60"), getJSON(q)]);
+    renderStatus(st);
+    renderTiles(st, stats);
+    renderChart(stats, st.now);
+    const newIds = new Set(firstLoad ? [] : fresh.map(a => a.id));
+    if (fresh.length) {
+      alerts = [...fresh.sort((a, b) => b.id - a.id), ...alerts].slice(0, 500);
+      lastId = alerts[0].id;
+    } else if (lastId === null) {
+      lastId = 0;
+    }
+    if (fresh.length || firstLoad) renderFeed(newIds);
+    firstLoad = false;
+    $("updated").textContent = "updated " + new Date().toLocaleTimeString([], {hour12: false});
+  } catch (e) {
+    $("daemon").textContent = "dashboard API unreachable";
+    $("daemon").className = "pill bad";
+  }
+}
+tick();
+setInterval(tick, 1500);
+window.addEventListener("resize", () => tick());
+</script>
+</body>
+</html>
