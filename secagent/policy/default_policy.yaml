@@ -63,6 +63,11 @@ monitors:
     backend: auto          # auto | ebpf | proc
     poll_interval: 0.5     # /proc/net fallback only
 
+  auth:
+    enabled: true
+    backend: auto          # auto | file | journald
+    # log_path: /var/log/auth.log   # default: first of /var/log/auth.log, /var/log/secure
+
 rules:
   # ------------------------------------------------------------------ process execution
   - id: suspicious-shell-from-webserver
@@ -205,6 +210,66 @@ rules:
       event_type: net_listen
       process_name: [bash, sh, dash, nc, ncat, netcat, nc.openbsd, nc.traditional, socat]
     message: "{process_name} (pid {pid}) is listening on {local_ip}:{local_port}"
+
+  # ------------------------------------------------------------------ authentication
+  - id: ssh-brute-force
+    description: Many failed SSH logins from one source address
+    mitre: T1110.001
+    severity: high
+    action: block_ip         # only executes if response.enabled is true
+    match: {event_type: auth_failure, service: sshd}
+    threshold: {count: 5, window: 60, group_by: [src_ip], cooldown: 300}
+    message: "{count} failed SSH logins from {src_ip} within {window}s (last tried user '{user}')"
+
+  - id: ssh-password-spray
+    description: One source tried many different usernames
+    mitre: T1110.003
+    severity: high
+    match: {event_type: auth_failure, service: sshd}
+    threshold: {count: 5, window: 300, group_by: [src_ip], distinct: user, cooldown: 600}
+    message: "{src_ip} tried {count} different usernames within {window}s"
+
+  - id: ssh-root-login
+    description: Successful SSH login as root
+    mitre: T1078.003
+    severity: medium
+    match: {event_type: auth_success, user: root}
+    message: "root logged in over SSH from {src_ip} ({method})"
+
+  - id: sudo-not-in-sudoers
+    description: A user without sudo rights tried to use sudo
+    mitre: T1548.003
+    severity: high
+    match: {event_type: auth_sudo, reason: not_in_sudoers}
+    message: "{user} (not in sudoers) tried: sudo -u {target_user} {command}"
+
+  - id: sudo-auth-failure
+    description: Failed sudo password attempts
+    mitre: T1110
+    severity: medium
+    match: {event_type: auth_sudo, reason: incorrect_password}
+    message: "{user} failed sudo authentication ({attempts} attempts) for: {command}"
+
+  - id: su-to-root-failed
+    description: Failed su to root
+    mitre: T1110
+    severity: medium
+    match: {event_type: auth_su, success: false, target_user: root}
+    message: "{user} failed su to root on {tty}"
+
+  - id: uid0-account-created
+    description: A new account was created with UID 0 (root-equivalent backdoor)
+    mitre: T1136.001
+    severity: critical
+    match: {event_type: account_created, uid: 0}
+    message: "New UID-0 account '{user}' created (home {home}, shell {shell})"
+
+  - id: account-created
+    description: A new local account was created
+    mitre: T1136.001
+    severity: low
+    match: {event_type: account_created, uid: {gt: 0}}
+    message: "New account '{user}' (uid {uid}) created"
 
 # Active response. OFF by default: destructive actions (kill_process, block_ip) are
 # logged as "not executed" unless enabled here. See README "Active response safety".
