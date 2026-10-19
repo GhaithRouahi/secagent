@@ -45,6 +45,7 @@ include = ["secagent*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
 markers = [
     "root: test requires root privileges",
     "ebpf: test requires a working bpftrace/eBPF environment",
