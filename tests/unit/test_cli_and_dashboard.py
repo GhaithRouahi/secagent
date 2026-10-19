@@ -46,11 +46,18 @@ def test_alerts_table_and_filters(capsys, db, monkeypatch):
     code, out = run(capsys, "--db", db, "alerts")
     assert code == 0
     assert "ssh-brute-force" in out and "exec-from-temp-dir" in out and "account-created" in out
-    assert "not executed: response disabled" in out
+    assert "RESPONSE" in out and "not executed (disabled)" in out
     _, out = run(capsys, "--db", db, "alerts", "--severity", "high", "--since", "1h")
     assert "ssh-brute-force" in out and "exec-from-temp-dir" not in out and "account-created" not in out
     _, out = run(capsys, "--db", db, "alerts", "--json", "--rule", "account-created")
     assert [a["rule_id"] for a in json.loads(out)] == ["account-created"]
+
+
+def test_short_result():
+    assert ctl.short_result(None) == "-"
+    assert ctl.short_result("not executed: response disabled (set ...)") == "not executed (disabled)"
+    assert ctl.short_result("blocked 203.0.113.9 for 600s (nftables inet secagent)") == "blocked 203.0.113.9 for 600s"
+    assert ctl.short_result("killed pid 941 (bash)") == "killed pid 941 (bash)"
 
 
 def test_show_alert(capsys, db):

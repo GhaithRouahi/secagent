@@ -192,6 +192,15 @@ def cmd_status(args) -> int:
     return 0
 
 
+def short_result(result: str | None) -> str:
+    """'blocked 1.2.3.4 for 3600s (nftables inet secagent)' -> 'blocked 1.2.3.4 for 3600s'."""
+    if not result:
+        return "-"
+    if result.startswith("not executed"):
+        return "not executed (disabled)"
+    return trunc(result.split(" (nftables")[0].split(" (iptables")[0], 32)
+
+
 def cmd_alerts(args) -> int:
     store = open_storage(args.db)
     rows = store.query_alerts(since=args.since, min_severity=args.severity, rule_id=args.rule,
@@ -202,11 +211,17 @@ def cmd_alerts(args) -> int:
     if not rows:
         print(dim("no alerts match"))
         return 0
-    table(["ID", "TIME", "SEVERITY", "RULE", "MESSAGE"],
-          [[a["id"], fmt_ts(a["timestamp"]), a["severity"].upper(), a["rule_id"],
-            a["message"] + (f"  [{a['action_result']}]" if a["action_result"] else "")]
-           for a in reversed(rows)],
-          colorize={2: lambda v, t: c(t, SEV_COLOR.get(v.lower(), "0"))})
+    sev_col = {2: lambda v, t: c(t, SEV_COLOR.get(v.lower(), "0"))}
+    if any(a["action_result"] for a in rows):
+        # response outcomes get their own column so they're never truncated away
+        table(["ID", "TIME", "SEVERITY", "RULE", "RESPONSE", "MESSAGE"],
+              [[a["id"], fmt_ts(a["timestamp"]), a["severity"].upper(), a["rule_id"],
+                short_result(a["action_result"]), a["message"]] for a in reversed(rows)],
+              colorize={**sev_col, 4: lambda v, t: c(t, "1;95" if v.startswith(("killed", "blocked")) else "2")})
+    else:
+        table(["ID", "TIME", "SEVERITY", "RULE", "MESSAGE"],
+              [[a["id"], fmt_ts(a["timestamp"]), a["severity"].upper(), a["rule_id"], a["message"]]
+               for a in reversed(rows)], colorize=sev_col)
     print(dim(f"\n{len(rows)} alert(s). Details: secagentctl show <ID>"))
     return 0
 
@@ -299,7 +314,7 @@ def cmd_policy_test(args) -> int:
     for cond in res["conditions"]:
         mark = c("✓", "1;92") if cond["passed"] else c("✗", "1;91")
         actual = json.dumps(cond["actual"], default=str) if cond["present"] else c("<missing>", "93")
-        print(f"  {mark} {cond['condition']:<60} {dim('actual:')} {actual}")
+        print(f"  {mark} {trunc(cond['condition'], 58):<58} {dim('actual:')} {actual}")
     print()
     if res["matched"]:
         print(c("MATCH", "1;92") + f"  → would raise: {res['message']}")
