@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from secagent.daemon.storage import Storage  # noqa: E402
 
 IS_LINUX = sys.platform.startswith("linux")
 IS_ROOT = IS_LINUX and os.geteuid() == 0
@@ -19,6 +20,13 @@ requires_linux = pytest.mark.skipif(not IS_LINUX, reason="requires Linux kernel 
 requires_root = pytest.mark.skipif(not IS_ROOT, reason="requires root")
 requires_ebpf = pytest.mark.skipif(not (IS_ROOT and HAS_BPFTRACE),
                                    reason="requires root + bpftrace")
+
+
+@pytest.fixture
+def storage(tmp_path):
+    s = Storage(tmp_path / "secagent.db")
+    yield s
+    s.close()
 
 
 def wait_for(predicate, timeout=10.0, interval=0.1):
