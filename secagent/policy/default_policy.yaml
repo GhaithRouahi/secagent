@@ -22,6 +22,42 @@ monitors:
     backend: auto          # auto | ebpf | proc
     poll_interval: 0.2     # /proc fallback only
 
+  file:
+    enabled: true
+    backend: auto          # auto | inotify | poll
+    debounce: 0.2          # seconds to coalesce bursts of writes before re-hashing
+    rescan_interval: 300   # full re-hash safety net (inotify overflow, late-created dirs)
+    max_hash_size: 104857600
+    watch:
+      # identity & privilege
+      - {path: /etc/passwd, group: identity}
+      - {path: /etc/shadow, group: identity}
+      - {path: /etc/group, group: identity}
+      - {path: /etc/gshadow, group: identity}
+      - {path: /etc/sudoers, group: identity}
+      - {path: /etc/sudoers.d, group: identity}
+      # remote access
+      - {path: /etc/ssh, group: ssh, recursive: true}
+      - {path: /root/.ssh, group: ssh}
+      # persistence
+      - {path: /etc/crontab, group: persistence}
+      - {path: /etc/cron.d, group: persistence}
+      - {path: /var/spool/cron/crontabs, group: persistence}
+      - {path: /etc/systemd/system, group: persistence, recursive: true}
+      - {path: /etc/ld.so.preload, group: preload}   # usually absent: creation = rootkit
+      # protected binaries (common trojan targets)
+      - {path: /usr/bin/sudo, group: binaries}
+      - {path: /usr/bin/su, group: binaries}
+      - {path: /usr/bin/passwd, group: binaries}
+      - {path: /usr/bin/login, group: binaries}
+      - {path: /usr/sbin/sshd, group: binaries}
+      - {path: /usr/bin/ssh, group: binaries}
+      - {path: /usr/bin/ps, group: binaries}
+      - {path: /usr/bin/ls, group: binaries}
+      - {path: /usr/bin/ss, group: binaries}
+      - {path: /usr/bin/netstat, group: binaries}
+      - {path: /usr/bin/bash, group: binaries}
+
 rules:
   # ------------------------------------------------------------------ process execution
   - id: suspicious-shell-from-webserver
@@ -78,6 +114,48 @@ rules:
       event_type: process_exec
       exe_deleted: true
     message: "{child_name} (pid {pid}) runs from deleted file {exe}"
+
+  # ------------------------------------------------------------------ file integrity
+  - id: identity-file-changed
+    description: Account / privilege database changed (passwd, shadow, group, sudoers)
+    mitre: T1098
+    severity: high
+    match: {event_type: file_change, group: identity}
+    message: "{path} {change} (sha256 {old_hash} -> {new_hash}, mode {old_mode} -> {new_mode})"
+
+  - id: ssh-config-or-keys-changed
+    description: SSH daemon config or root authorized_keys changed (backdoor access)
+    mitre: T1098.004
+    severity: high
+    match: {event_type: file_change, group: ssh}
+    message: "{path} {change} (sha256 {old_hash} -> {new_hash})"
+
+  - id: persistence-location-changed
+    description: Cron or systemd unit changed (persistence)
+    mitre: T1053.003
+    severity: high
+    match: {event_type: file_change, group: persistence}
+    message: "{path} {change} (sha256 {old_hash} -> {new_hash})"
+
+  - id: ld-preload-tampering
+    description: /etc/ld.so.preload created or changed (userland rootkit technique)
+    mitre: T1574.006
+    severity: critical
+    match: {event_type: file_change, group: preload}
+    message: "{path} {change} (sha256 {old_hash} -> {new_hash})"
+
+  - id: protected-binary-modified
+    description: A protected system binary was replaced or modified (trojanized binary)
+    mitre: T1554
+    severity: critical
+    match: {event_type: file_change, group: binaries}
+    message: "{path} {change} (sha256 {old_hash} -> {new_hash})"
+
+  - id: watched-file-changed
+    description: A user-configured watched file changed
+    severity: medium
+    match: {event_type: file_change, group: custom}
+    message: "{path} {change} (sha256 {old_hash} -> {new_hash})"
 
 # Active response. OFF by default: destructive actions (kill_process, block_ip) are
 # logged as "not executed" unless enabled here. See README "Active response safety".
