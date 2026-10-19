@@ -121,7 +121,11 @@ class BpftraceProcess:
                 yield msg.get("data")
 
     def wait_attached(self, timeout: float | None = None) -> bool:
-        """Block until probes are attached, or the process dies / times out."""
+        """Block until bpftrace reports its probes, or the process dies / times out.
+
+        NB: bpftrace emits this message *before* kprobes are live (attaching takes a
+        few hundred ms more), so monitors must follow up with ``self_test`` before
+        declaring themselves ready."""
         deadline = time.monotonic() + (timeout or self.attach_timeout)
         while time.monotonic() < deadline:
             if self._attached.is_set():
@@ -130,6 +134,9 @@ class BpftraceProcess:
                 return False
             time.sleep(0.05)
         return self._attached.is_set()
+
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:

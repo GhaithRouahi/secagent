@@ -18,6 +18,8 @@ def start_net(harness, backend):
     mon = NetworkMonitor(harness.bus.publish, backend=backend, poll_interval=0.2)
     harness.start(mon)
     assert mon.backend == backend
+    if backend == "ebpf":
+        assert mon.status()["self_test"].startswith("ok"), mon.status()
     return mon
 
 

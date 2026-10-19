@@ -21,6 +21,8 @@ Emitted event: ``process_exec`` with fields
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import threading
 import time
 from typing import Any
@@ -28,6 +30,7 @@ from typing import Any
 from secagent.daemon import procfs
 from secagent.daemon.bpftrace import (BPF_DIR, MAX_STRLEN, BpftraceProcess, decode_argv,
                                       decode_buf, ebpf_supported)
+from secagent.daemon.canary import Canary
 from secagent.daemon.monitor import Monitor, Publish
 from secagent.events import PROCESS_EXEC
 
@@ -81,6 +84,7 @@ class ProcessMonitor(Monitor):
         self.ignore_pids: set[int] = {os.getpid()}
         self.fallback_reason: str | None = None
         self.ns_invisible = 0
+        self.canary: Canary | None = None
         self._bpf: BpftraceProcess | None = None
         self._pending: dict[int, tuple[float, list]] = {}
         self._pending_lock = threading.Lock()
@@ -102,6 +106,7 @@ class ProcessMonitor(Monitor):
     def status(self) -> dict[str, Any]:
         st = super().status()
         st["fallback_reason"] = self.fallback_reason
+        st["self_test"] = self.canary.result if self.canary and self.backend == "ebpf" else None
         return st
 
     def _stop(self) -> None:
@@ -119,13 +124,20 @@ class ProcessMonitor(Monitor):
         if self._bpf.pid:
             self.ignore_pids.add(self._bpf.pid)
         self.spawn(self._ebpf_reader, "ebpf-reader")
-        if not self._bpf.wait_attached():
-            self.record_error(self._bpf.stderr_tail or "attach timeout")
-            self._bpf.stop()
+        self.spawn(self._pending_flusher, "ebpf-pending")
+        bpf = self._bpf
+        self.canary = Canary()
+        true_bin = shutil.which("true") or "/bin/true"
+        ok = bpf.wait_attached() and self.canary.run(
+            lambda: subprocess.run([true_bin, self.canary.token], check=False,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+            alive=bpf.alive)
+        if not ok:
+            self.record_error(f"eBPF self-test {self.canary.result}; {bpf.stderr_tail}".strip("; "))
+            bpf.stop()
             self._bpf = None
             return False
         self.backend = "ebpf"
-        self.spawn(self._pending_flusher, "ebpf-pending")
         return True
 
     def _ebpf_reader(self) -> None:
@@ -183,6 +195,9 @@ class ProcessMonitor(Monitor):
             truncated = len(decode_buf(argv_buf)) >= MAX_STRLEN
         else:
             argv, truncated = [], True
+        if self.canary is not None and self.canary.token in argv:
+            self.canary.seen()  # our own startup self-test exec - not a real event
+            return
         if truncated:
             # kernel copy hit the BPF string limit: top up from /proc if still alive
             info = procfs.read_proc(pid, self.proc_root)

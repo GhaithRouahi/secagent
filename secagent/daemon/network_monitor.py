@@ -27,6 +27,7 @@ from typing import Any
 
 from secagent.daemon import procfs
 from secagent.daemon.bpftrace import BPF_DIR, BpftraceProcess, ebpf_supported
+from secagent.daemon.canary import Canary
 from secagent.daemon.monitor import Monitor, Publish
 from secagent.events import NET_ACCEPT, NET_CONNECT, NET_LISTEN
 
@@ -119,6 +120,8 @@ class NetworkMonitor(Monitor):
         self.proc_root = proc_root
         self.ignore_pids: set[int] = {os.getpid()}
         self.fallback_reason: str | None = None
+        self.canary: Canary | None = None
+        self._canary_port = -1
         self._bpf: BpftraceProcess | None = None
         self._seen: set[int] = set()
         self._inode_pid: dict[int, int] = {}
@@ -144,6 +147,7 @@ class NetworkMonitor(Monitor):
     def status(self) -> dict[str, Any]:
         st = super().status()
         st["fallback_reason"] = self.fallback_reason
+        st["self_test"] = self.canary.result if self.canary and self.backend == "ebpf" else None
         return st
 
     # ------------------------------------------------------------ eBPF
@@ -157,9 +161,24 @@ class NetworkMonitor(Monitor):
         if self._bpf.pid:
             self.ignore_pids.add(self._bpf.pid)
         self.spawn(self._ebpf_reader, "ebpf-reader")
-        if not self._bpf.wait_attached():
-            self.record_error(self._bpf.stderr_tail or "attach timeout")
-            self._bpf.stop()
+        bpf = self._bpf
+        # self-test: connect to our own loopback listener until the probe reports it
+        self.canary = Canary()
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(128)
+        self._canary_port = listener.getsockname()[1]
+
+        def trigger() -> None:
+            socket.create_connection(("127.0.0.1", self._canary_port), timeout=1).close()
+
+        try:
+            ok = bpf.wait_attached() and self.canary.run(trigger, alive=bpf.alive)
+        finally:
+            listener.close()
+        if not ok:
+            self.record_error(f"eBPF self-test {self.canary.result}; {bpf.stderr_tail}".strip("; "))
+            bpf.stop()
             self._bpf = None
             return False
         self.backend = "ebpf"
@@ -183,6 +202,10 @@ class NetworkMonitor(Monitor):
             return
         kind, _kpid, pid, comm, fam, lip, lport, rip, rport = rec
         pid = int(pid) or None  # 0 = outside our PID namespace
+        if (self.canary is not None and kind == "connect" and pid == os.getpid()
+                and int(rport) == self._canary_port):
+            self.canary.seen()
+            return
         if pid in self.ignore_pids:
             return
         if kind == "connect":
